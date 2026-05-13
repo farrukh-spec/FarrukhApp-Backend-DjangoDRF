@@ -71,6 +71,7 @@ urlpatterns = [
     path("auth/google/callback/", views.google_callback),
     path("forgot-password/", views.forgot_password),
     path("reset-password/", views.reset_password),
+    path("test-endpoint/", views.test_endpoint),
     # path('',views.home)
 ]
 

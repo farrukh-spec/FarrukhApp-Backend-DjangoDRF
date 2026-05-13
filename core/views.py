@@ -836,7 +836,11 @@ def reset_password(request):
     return Response({"message": "Password reset successful"})
     
     
-     
+    # ================= testing endpoint just json   =================
+@api_view(['GET'])
+def test_endpoint(request):
+    return Response({"message": "Hello, World!"})
+
     # import requests
 
 # def google_callback(request):
