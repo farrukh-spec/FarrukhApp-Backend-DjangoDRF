@@ -35,7 +35,9 @@ DEBUG = os.getenv('DEBUG') == 'True'
 ALLOWED_HOSTS = []
 # ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 # ALLOWED_HOSTS = ['farrukhapp-django-drf.onrender.com', 'localhost', '127.0.0.1']
-
+# settings.py
+# Remove the empty list and use this:
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '127.0.0.1,localhost').split(',')
 # Application definition
 
 INSTALLED_APPS = [
