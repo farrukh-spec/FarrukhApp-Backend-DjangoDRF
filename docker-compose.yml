@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    # This checks if Postgres is "alive" every 5 seconds
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    
+  # NEW: The Redis Service
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # We don't need ports here because only 'web' talks to 'redis'
+    # but if you want to see it from your PC, use - "6379:6379"
+    ports:
+      - "6379:6379"  # Maps PC port 6379 to Container port 6379
+
+  web:
+    build: .
+    # The --reload flag is for your "Mango" updates
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --reload
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    # This is the professional way to link services
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+
+
+# version: '3.8'
+
+# services:
+#   web:
+#     build: .
+#     # This maps your PC port 8000 to the container port 8000
+#     command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --reload #  this is the magicall line 
+#     ports:
+#       - "8000:8000"
+#     # This tells Docker to use your .env file for secrets
+#     env_file:
+#       - .env
+#     # This is magic! It lets you change code and see it update without rebuilding
+#     volumes:
+#       - .:/app

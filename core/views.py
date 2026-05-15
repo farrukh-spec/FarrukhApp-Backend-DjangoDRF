@@ -12,7 +12,7 @@ from .serializers import UserSerializer, PostSerializer, TagSerializer, ProfileS
 from .models import User, Post, Tag, Profile
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
-
+from django.core.cache import cache
 from django.conf import settings
 from django.shortcuts import redirect
 from config import settings
@@ -541,7 +541,8 @@ def create_profile(request):
     user_id=data.get("user_id")
     bio=data.get("bio")
     avatar=data.get("avatar")
-    profile=services.create_profile(user_id,bio,avatar)
+    profile_picture=data.get("profile_picture")
+    profile=services.create_profile(user_id,bio,avatar,profile_picture)
     if not profile:
         return JsonResponse({"error":"User not found"},status=404)
     return JsonResponse({
@@ -586,6 +587,8 @@ def create_user_with_serializer(request):
     if serializer.is_valid():
         # user=serializer.save()
         serializer.save()
+        # INVALIDATION: New user added, so the list cache is now wrong
+        cache.delete('all_users_list')
         return Response({
             "success":True,
             "data":serializer.data
@@ -600,8 +603,13 @@ def create_user_with_serializer(request):
     
 @api_view(['GET'])
 def get_users(request):
+    cache_key = 'all_users_list'
+    cached_data = cache.get(cache_key)
+    if cached_data:
+        return Response({"success": True, "source": "cache", "data": cached_data})
     users=User.objects.all()
     serializer=UserSerializer(users,many=True)
+    cache.set(cache_key, serializer.data, timeout=60)
     return Response({
         "success":True,
         "count":len(serializer.data),
@@ -609,19 +617,36 @@ def get_users(request):
     })
     
 # ========================================= get users  by id ============================
+# @api_view(['GET'])
+# def get_user_by_id(request,user_id):
+#     user=User.objects.filter(id=user_id).first()
+#     if not user:
+#         return Response({
+#             "success":False,
+#             "message":"User not found"
+#         },status=404)
+#     serializer=UserSerializer(user)
+#     return Response({
+#         "success":True,
+#         "data":serializer.data
+#     })
+
 @api_view(['GET'])
-def get_user_by_id(request,user_id):
-    user=User.objects.filter(id=user_id).first()
+def get_user_by_id(request, user_id):
+    cache_key = f"user_profile_{user_id}"
+    cached_user = cache.get(cache_key)
+
+    if cached_user:
+        return Response({"success": True, "source": "cache", "data": cached_user})
+
+    user = User.objects.filter(id=user_id).first()
     if not user:
-        return Response({
-            "success":False,
-            "message":"User not found"
-        },status=404)
-    serializer=UserSerializer(user)
-    return Response({
-        "success":True,
-        "data":serializer.data
-    })
+        return Response({"success": False, "message": "User not found"}, status=404)
+
+    serializer = UserSerializer(user)
+    cache.set(cache_key, serializer.data, timeout=300)
+
+    return Response({"success": True, "source": "database", "data": serializer.data})
     
     # ========================================= update users  with serializer============================
     
@@ -636,10 +661,14 @@ def update_user_with_serializer(request,user_id):
         serializer=UserSerializer(user,data=request.data,partial=True)
         if serializer.is_valid():
             serializer.save()
+            # PRO TIP: Delete the list cache so the next 'GET' sees the update
+            cache.delete('all_users_list')
+            cache.delete(f"user_profile_{user_id}")
             return Response({
                 "success":True,
                 "data":serializer.data
             })
+            
         return Response({
             "success":False,
             "errors":serializer.errors
@@ -656,6 +685,9 @@ def delete_user_with_serializer(request,user_id):
                 "message":"User not found"
             },status=404)
         user.delete()
+        # INVALIDATION: User is gone
+        cache.delete('all_users_list')
+        cache.delete(f"user_profile_{user_id}")
         return Response({
             "success":True,
             "message":"User deleted successfully"
@@ -741,55 +773,116 @@ def google_login(request):
     return redirect(google_auth_url)
  # ========================================= Google OAuth callback  ============================
     
-def google_callback(request):
+# def google_callback(request):
 
-    code = request.GET.get("code")
+#     code = request.GET.get("code")
 
-    # return JsonResponse({
-    #     "code": code
-    # })
+#     # return JsonResponse({
+#     #     "code": code
+#     # })
     
+#     token_url = "https://oauth2.googleapis.com/token"
+#     data = {
+#         "code": code,
+#         "client_id": settings.GOOGLE_CLIENT_ID,
+#         "client_secret": settings.GOOGLE_CLIENT_SECRET,
+#         "redirect_uri": "http://localhost:8000/auth/google/callback/",
+#         "grant_type": "authorization_code",
+#     }
+#     response = requests.post(token_url, data=data)
+#     token_response = response.json()
+#     access_token = token_response.get("access_token")
+#      # ================= GOOGLE USER INFO =================
+     
+#     userinfo_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+#     headers = {"Authorization": f"Bearer {access_token}"}
+#     userinfo_response = requests.get(userinfo_url, headers=headers)
+#     userinfo = userinfo_response.json()
+#     email = userinfo.get("email")   
+#     name = userinfo.get("name")
+    
+#      # ================= CREATE USER =================
+#     user, created = User.objects.get_or_create(
+#      username=email,
+#      defaults={"first_name": name, "email": email}
+     
+#     )
+    
+#     # ================= CREATE JWT TOKENS =================
+    
+#     refresh = RefreshToken.for_user(user)
+#     return JsonResponse({
+#         "refresh": str(refresh),
+#         "access": str(refresh.access_token),
+#         "user": {
+#             "id": user.id,
+#             "username": user.username,
+#             "email": user.email,
+#             "name": user.first_name
+#         }
+#     })
+     
+     
+     
+def google_callback(request):
+    code = request.GET.get("code")
+    if not code:
+        return JsonResponse({"error": "No code provided from Google"}, status=400)
+
+    # 1. Exchange Code for Access Token
     token_url = "https://oauth2.googleapis.com/token"
     data = {
         "code": code,
         "client_id": settings.GOOGLE_CLIENT_ID,
         "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "redirect_uri": "http://localhost:8000/auth/google/callback/",
+        "redirect_uri": "http://localhost:8000/auth/google/callback/", # MUST match your console
         "grant_type": "authorization_code",
     }
-    response = requests.post(token_url, data=data)
-    token_response = response.json()
+    
+    token_response = requests.post(token_url, data=data).json()
     access_token = token_response.get("access_token")
-     # ================= GOOGLE USER INFO =================
-     
+
+    # GATE 1: Did we actually get a token?
+    if not access_token:
+        return JsonResponse({
+            "error": "Failed to get access token",
+            "details": token_response  # This helps you debug!
+        }, status=400)
+
+    # 2. Get Google User Profile
     userinfo_url = "https://www.googleapis.com/oauth2/v1/userinfo"
     headers = {"Authorization": f"Bearer {access_token}"}
-    userinfo_response = requests.get(userinfo_url, headers=headers)
-    userinfo = userinfo_response.json()
-    email = userinfo.get("email")   
-    name = userinfo.get("name")
+    userinfo = requests.get(userinfo_url, headers=headers).json()
     
-     # ================= CREATE USER =================
+    email = userinfo.get("email")
+    name = userinfo.get("name", "")
+
+    # GATE 2: Did Google give us an email?
+    if not email:
+        return JsonResponse({"error": "Google did not return an email address"}, status=400)
+
+    # 3. Save User to Database
+    # We use 'email' as the 'username' because emails are unique
     user, created = User.objects.get_or_create(
-     username=email,
-     defaults={"first_name": name, "email": email}
-     
+        username=email, 
+        defaults={
+            "email": email,
+            "first_name": name
+        }
     )
-    
-    # ================= CREATE JWT TOKENS =================
-    
+
+    # 4. Generate JWT for your Backend
     refresh = RefreshToken.for_user(user)
+    
     return JsonResponse({
         "refresh": str(refresh),
         "access": str(refresh.access_token),
         "user": {
             "id": user.id,
-            "username": user.username,
             "email": user.email,
-            "name": user.first_name
+            "username": user.username
         }
     })
-     
      
       # ================= forget password  =================
       
@@ -839,7 +932,54 @@ def reset_password(request):
     # ================= testing endpoint just json   =================
 @api_view(['GET'])
 def test_endpoint(request):
-    return Response({"message": "Hello, World!"})
+    return Response({"message": "Hello, World! mango ginga lala"})
+
+
+# ================= now fro the cache by using the redis   =================
+
+# @api_view(['GET'])
+# def get_all_users_cache(request):
+#     cached_users = cache.get('all_users')
+#     if cached_users is not None:
+#         return Response({
+#             "success": True,
+#             "redis_cache": True,
+#             "count": len(cached_users),
+#             "users": cached_users
+#         })
+#     # data=services.get_all_users()
+#     data=User.objects.all()
+#     users=list(data.values())
+#     cache.set('all_users', users, timeout=30)  # Cache for 60 seconds
+#     return Response({"count":len(users),"users":users , "realdb": True})
+
+
+@api_view(['GET'])
+def get_all_users_cache(request):
+    cache_key = 'all_users_list'
+    
+    # 1. Try to get data from Redis
+    cached_data = cache.get(cache_key)
+    
+    if cached_data:
+        return Response({
+            "success": True,
+            "source": "cache",
+            "data": cached_data
+        })
+
+    # 2. Cache MISS: Hit the DB
+    users = User.objects.all()
+    serializer = UserSerializer(users, many=True)
+    
+    # 3. Save the serialized data to Redis (30 seconds)
+    cache.set(cache_key, serializer.data, timeout=60)
+    
+    return Response({
+        "success": True,
+        "source": "database",
+        "data": serializer.data
+    })
 
     # import requests
 

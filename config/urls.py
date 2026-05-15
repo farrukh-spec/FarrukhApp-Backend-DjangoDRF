@@ -72,7 +72,8 @@ urlpatterns = [
     path("forgot-password/", views.forgot_password),
     path("reset-password/", views.reset_password),
     path("test-endpoint/", views.test_endpoint),
-    # path('',views.home)
+    path("get-all-users-cache/", views.get_all_users_cache),
+    # path('',views.home)get_all_users_cache
 ]
 
 

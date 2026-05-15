@@ -223,14 +223,15 @@ def get_tag_with_users(tag_id):
     tag=Tag.objects.prefetch_related("users").filter(id=tag_id).first()
     return tag
 
-def create_profile(user_id,bio=None,avatar=None):
+def create_profile(user_id,bio=None,avatar=None,profile_picture=None):
     user=User.objects.filter(id=user_id).first()
     if not user:
         return None
     profile=Profile.objects.create(
         user=user,
         bio=bio,
-        avatar=avatar
+        avatar=avatar,
+        profile_picture=profile_picture
     )
     return profile
     
