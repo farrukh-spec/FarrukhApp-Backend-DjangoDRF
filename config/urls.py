@@ -73,7 +73,10 @@ urlpatterns = [
     path("reset-password/", views.reset_password),
     path("test-endpoint/", views.test_endpoint),
     path("get-all-users-cache/", views.get_all_users_cache),
+    path("api/calculate/", views.trigger_calculation_api),
+    path("api/calculate/status/<str:task_id>/", views.check_task_status_api),
     # path('',views.home)get_all_users_cache
+    path("api/schedule-alarm/", views.schedule_user_alarm_api),
 ]
 
 

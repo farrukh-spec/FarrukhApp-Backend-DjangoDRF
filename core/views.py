@@ -24,6 +24,8 @@ import requests
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
+from celery.result import AsyncResult # Importer to check status inside Redis
+from .tasks import process_heavy_calculation, send_future_alert_task
 # ==============================>create user<=================
 @csrf_exempt
 def create_user(request):
@@ -532,29 +534,76 @@ def get_tag_with_users(request,tag_id):
             }
         })  
 
+# @csrf_exempt
+# def create_profile(request):
+#     # try:
+#     #      data=json.loads(request.body)
+#     # except:
+#     #      return JsonResponse({"error": "Invalid JSON"}, status=400) 
+#     # user_id=data.get("user_id")
+#     # bio=data.get("bio")
+#     # avatar=data.get("avatar")
+#     # profile_picture=request.FILES.get("profile_picture")
+#     user_id=request.POST.get("user_id")
+#     bio=request.POST.get("bio")
+#     avatar=request.POST.get("avatar")
+#     profile_picture=request.FILES.get("profile_picture")
+#     profile=services.create_profile(user_id,bio,avatar,profile_picture)
+#     if not profile:
+#         return JsonResponse({"error":"User not found"},status=404)
+#     return JsonResponse({
+#         "success":True,
+#         "data":{
+#             "id":profile.id,
+#             "user_id":profile.user.id,
+#             "bio":profile.bio,
+#             "avatar":profile.avatar,
+#             # "profile_picture":profile.profile_picture
+#             "profile_picture": profile.profile_picture.url if profile.profile_picture else None
+#         }
+#     })
+
 @csrf_exempt
 def create_profile(request):
-    try:
-        data=json.loads(request.body)
-    except:
-         return JsonResponse({"error": "Invalid JSON"}, status=400) 
-    user_id=data.get("user_id")
-    bio=data.get("bio")
-    avatar=data.get("avatar")
-    profile_picture=data.get("profile_picture")
-    profile=services.create_profile(user_id,bio,avatar,profile_picture)
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    # 1. Read Text data from form-data using request.POST
+    user_id = request.POST.get("user_id")
+    bio = request.POST.get("bio")
+    avatar = request.POST.get("avatar")
+    
+    # 2. Read the binary Image file from request.FILES
+    profile_picture = request.FILES.get("profile_picture")
+
+    # Validate that we got a user_id
+    if not user_id:
+        return JsonResponse({"error": "user_id is required"}, status=400)
+
+    # 3. Call your service to process and save to S3
+    profile = services.create_profile(user_id, bio, avatar, profile_picture)
+    
     if not profile:
-        return JsonResponse({"error":"User not found"},status=404)
+        return JsonResponse({"error": "User not found"}, status=404)
+        
+    # 4. Return success response
     return JsonResponse({
-        "success":True,
-        "data":{
-            "id":profile.id,
-            "user_id":profile.user.id,
-            "bio":profile.bio,
-            "avatar":profile.avatar
+        "success": True,
+        "data": {
+            "id": profile.id,
+            "user_id": profile.user.id,
+            "bio": profile.bio,
+            "avatar": profile.avatar,
+            # .url will give you the full automatic AWS S3 bucket string path!
+            "profile_picture": profile.profile_picture.url if profile.profile_picture else None
         }
     })
 
+# {
+#     "user_id": 2,
+#     "avatar": " s3 management",
+#     "bio": "bio of the farrukh"
+# }
 
 # ======================================================get users with profile  ============================
 
@@ -979,6 +1028,85 @@ def get_all_users_cache(request):
         "success": True,
         "source": "database",
         "data": serializer.data
+    })
+
+
+
+# ==================================celery jobs
+
+@csrf_exempt
+def trigger_calculation_api(request):
+    """Endpoint 1: Launches the job and hands back a tracking ticket ID"""
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+        
+    try:
+        data = json.loads(request.body)
+    except:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+        
+    num1 = data.get("num1")
+    num2 = data.get("num2")
+    
+    if not num1 or not num2:
+        return JsonResponse({"error": "Please provide num1 and num2"}, status=400)
+
+    # Launch the task instantly in the background
+    task = process_heavy_calculation.delay(num1, num2)
+
+    # Instantly return the tracking ticket ID to Postman
+    return JsonResponse({
+        "success": True,
+        "message": "Calculation processing started in backend memory stack.",
+        "task_id": task.id # This is the unique UUID string token
+    })
+
+
+def check_task_status_api(request, task_id):
+    """Endpoint 2: User passes the task_id here to look inside Redis for the answer"""
+    # Look into your Redis container using the task UUID
+    task_result = AsyncResult(task_id)
+    
+    response_data = {
+        "task_id": task_id,
+        "status": task_result.status, # Returns PENDING, STARTED, SUCCESS, or FAILURE
+        "result": None
+    }
+    
+    if task_result.status == "SUCCESS":
+        response_data["result"] = task_result.result # Captures the returned math value!
+        
+    return JsonResponse(response_data)
+
+
+
+@csrf_exempt
+def schedule_user_alarm_api(request):
+    """Endpoint: User provides a message and a countdown delay in seconds"""
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+        
+    try:
+        data = json.loads(request.body)
+    except:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+        
+    user_id = data.get("user_id")
+    message = data.get("message")
+    delay_seconds = data.get("delay_seconds") # How many seconds to wait (e.g., 30)
+
+    if not user_id or not message or not delay_seconds:
+        return JsonResponse({"error": "Missing user_id, message, or delay_seconds"}, status=400)
+
+    # MAGIC KEYWORD: countdown tells Celery how many seconds to wait before executing
+    send_future_alert_task.apply_async(
+        args=[user_id, message],
+        countdown=int(delay_seconds) 
+    )
+
+    return JsonResponse({
+        "success": True,
+        "message": f"Alarm successfully scheduled! The system will execute it in exactly {delay_seconds} seconds."
     })
 
     # import requests

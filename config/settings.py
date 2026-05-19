@@ -15,7 +15,8 @@ from datetime import timedelta
 import os
 import dj_database_url
 from dotenv import load_dotenv
-
+from django.db.backends.mysql.schema import DatabaseSchemaEditor
+from celery.schedules import crontab
 # This loads the variables from .env into the system memory
 load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'core',
     'rest_framework',
+   
 ]
 
 MIDDLEWARE = [
@@ -113,7 +115,7 @@ SIMPLE_JWT = {
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
+# /////////////////////////////////////////////////////real db
 DATABASES = {
     'default': dj_database_url.config(
         default=os.getenv('DATABASE_URL'),
@@ -121,6 +123,11 @@ DATABASES = {
         conn_health_checks=True,
     )
 }
+# ///////////////////////////////////////////real db
+
+
+# settings.py
+
 
 
 # DATABASES = {
@@ -153,26 +160,73 @@ GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET')
 
 
-# S3 Configuration
+# # S3 Configuration
+# USE_S3 = os.getenv('USE_S3') == 'TRUE'
+
+# if USE_S3:
+#     # This tells Django to use S3 for Media files
+#     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    
+#     AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+#     AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+#     AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
+#     AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME')
+    
+#     # This makes the files public so we can see them via URL
+#     AWS_QUERYSTRING_AUTH = False
+#     AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+# else:
+#     # Standard local storage
+#     MEDIA_URL = '/media/'
+#     MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+
+
+# settings.py
+
+
+
+# ==============================================================================
+# STORAGE & FILE CONFIGURATION (DJANGO 6 + S3 + WHITENOISE)
+# ==============================================================================
+
 USE_S3 = os.getenv('USE_S3') == 'TRUE'
 
 if USE_S3:
-    # This tells Django to use S3 for Media files
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            # WhiteNoise optimization for static assets, while uploads go to S3
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage", 
+        },
+    }
     
+    # AWS Credentials
     AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
     AWS_S3_REGION_NAME = os.getenv('AWS_S3_REGION_NAME')
     
-    # This makes the files public so we can see them via URL
+    # Extra S3 Settings
     AWS_QUERYSTRING_AUTH = False
     AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+
 else:
-    # Standard local storage
+    # LOCAL FALLBACK FOR DEVELOPMENT
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+        },
+    }
     MEDIA_URL = '/media/'
     MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -205,15 +259,39 @@ USE_I18N = True
 USE_TZ = True
 
 
+
+
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
+# STATIC_URL = 'static/'
 
-# At the very bottom of settings.py, add:
-STATIC_ROOT = BASE_DIR / "staticfiles"
-STORAGES = {
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+# # At the very bottom of settings.py, add:
+# STATIC_ROOT = BASE_DIR / "staticfiles"
+# STORAGES = {
+#     "staticfiles": {
+#         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+#     },
+# }
+
+# //////////////////////////////////////celery
+
+# ==============================================================================
+# CELERY ENTERPRISE TASK CONFIGURATION
+# ==============================================================================
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/1")
+CELERY_RESULT_BACKEND = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/1")
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# Define your time-based schedules (Cron tasks)
+# from celery.schedules import crontab
+
+CELERY_BEAT_SCHEDULE = {
+    'run-cleanup-every-minute': {
+        'task': 'core.tasks.cleanup_expired_data',
+        'schedule': crontab(minute='*/1'), # Runs every 1 minute using cron syntax
     },
 }
